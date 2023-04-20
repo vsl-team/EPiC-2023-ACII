@@ -41,9 +41,15 @@ def get_dataloader(run_cfg):
 def get_mode(run_cfg):
     seq_len = run_cfg.MODEL.SEQ_LEN
 
+    if run_cfg.MODEL.PRETRAINED != "" and Path(run_cfg.MODEL.PRETRAINED).is_file():
+        use_random_feature = True
+        print('Using random features')
+    else:
+        use_random_feature = False
+
     model = EPiCModel(seq_len, num_stages=run_cfg.MODEL.N_STAGES, dim_ff=run_cfg.MODEL.DIM_FF,
                       n_heads=run_cfg.MODEL.N_HEADS, n_layers=run_cfg.MODEL.N_LAYERS,
-                      hid_multiplier=run_cfg.MODEL.HID_MULT, num_outputs=2)
+                      hid_multiplier=run_cfg.MODEL.HID_MULT, num_outputs=2, random_feature=use_random_feature)
 
     base_lr = run_cfg.OPTIM.BASE_LR
     wd = run_cfg.OPTIM.WEIGHT_DECAY
@@ -81,11 +87,21 @@ def get_mode(run_cfg):
 
     loss_func = tf.losses.MeanSquaredError()
     metrics = [tf.metrics.MeanSquaredError(name='mse')]
+
     model.compile(optimizer=opt, loss=loss_func, metrics=metrics, run_eagerly=run_cfg.DEBUG)
 
     if run_cfg.MODEL.PRETRAINED != "" and Path(run_cfg.MODEL.PRETRAINED).is_file():
         print('Loading pretrained weights ', run_cfg.MODEL.PRETRAINED)
         model.load_weights(run_cfg.MODEL.PRETRAINED, skip_mismatch=True, by_name=True)
+        # Freeze all, except last dense layer
+        print("trainable_weights:", len(model.trainable_weights))
+        print('Freezing all, except last dense layer.')
+        for idx in range(len(model.layers)):
+            if model.layers[idx].name != 'regression_head':
+                model.layers[idx].trainable = False
+
+        print("after freezed, trainable_weights:", len(model.trainable_weights))
+
     return model
 
 
@@ -116,7 +132,7 @@ def run_experiments(run_cfg, num_gpus):
     prediction_group = pd.DataFrame({'name': test_name, 'time': test_arr[:, 0], 'valence': test_prediction[:, 0],
                                      'arousal': test_prediction[:, 1]}).groupby(by='name')
 
-    write_folder = Path(cfg.OUT_DIR) / 'annotations'
+    write_folder = Path(cfg.OUT_DIR) / 'test/annotations'
     write_folder.mkdir(exist_ok=True)
     print('Writing prediction to ', write_folder.__str__())
     for name, pred in prediction_group:

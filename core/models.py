@@ -21,22 +21,17 @@ class RegressionHead(layers.Layer):
 
         if not self._random_feature:
             reg_layers = [layers.Dense(self._dim_ff, kernel_initializer='HeNormal'),
-                          layers.Activation(self._activation), ]
+                          layers.Activation(self._activation),
+                          layers.Dense(self._num_outputs, activation='linear', kernel_initializer='HeNormal')]
         else:
-            reg_layers = [
-                tf.keras.layers.experimental.RandomFourierFeatures(self._dim_ff, kernel_initializer='gaussian', dtype=tf.float32)]
-
-        reg_layers.append(layers.Dense(self._num_outputs, activation='linear', kernel_initializer='HeNormal'))
+            reg_layers = [layers.Dense(self._num_outputs, activation='linear', kernel_initializer='HeNormal')]
         self.reg_head = keras.Sequential(reg_layers)
 
     def call(self, inputs, training=None):
         if training is None:
             training = tf.keras.backend.learning_phase()
 
-        if self._random_feature:
-            x = tf.cast(inputs, dtype=tf.float32)
-        else:
-            x = inputs
+        x = inputs
 
         outs = self.reg_head(x, training=training)
 
@@ -168,9 +163,13 @@ class EPiCModel(tf.keras.Model):
             out_stages.append(x1)
 
         x = tf.concat(out_stages, axis=-1)
-        # x = tf.cast(x, dtype=tf.float32)
-        x = RegressionHead(num_outputs=num_outputs, dim_ff=dim_ff * num_stages * hid_multiplier, activation='relu',
-                           random_feature=random_feature)(x)
+
+        if random_feature:
+            x = tf.cast(x, dtype=tf.float32)
+            x = tf.keras.layers.experimental.RandomFourierFeatures(dim_ff*num_stages*hid_multiplier, kernel_initializer='gaussian',
+                                                                   dtype=tf.float32)(x)
+
+        x = RegressionHead(num_outputs=num_outputs, dim_ff=dim_ff*num_stages*hid_multiplier, activation='relu', random_feature=True)(x)
 
         output = tf.cast(x, dtype=inputs.dtype)
         super(EPiCModel, self).__init__(inputs=[inputs, ], outputs=[output], **kwargs)
