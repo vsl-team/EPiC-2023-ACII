@@ -49,7 +49,8 @@ def get_mode(run_cfg):
 
     model = EPiCModel(seq_len, num_stages=run_cfg.MODEL.N_STAGES, dim_ff=run_cfg.MODEL.DIM_FF,
                       n_heads=run_cfg.MODEL.N_HEADS, n_layers=run_cfg.MODEL.N_LAYERS,
-                      hid_multiplier=run_cfg.MODEL.HID_MULT, num_outputs=2, random_feature=use_random_feature)
+                      hid_multiplier=run_cfg.MODEL.HID_MULT, num_outputs=2, random_feature=use_random_feature,
+                      variant=run_cfg.MODEL.VARIANT)
 
     base_lr = run_cfg.OPTIM.BASE_LR
     wd = run_cfg.OPTIM.WEIGHT_DECAY
@@ -133,7 +134,7 @@ def run_experiments(run_cfg, num_gpus):
                                      'arousal': test_prediction[:, 1]}).groupby(by='name')
 
     write_folder = Path(cfg.OUT_DIR) / 'test/annotations'
-    write_folder.mkdir(exist_ok=True)
+    write_folder.mkdir(exist_ok=True, parents=True)
     print('Writing prediction to ', write_folder.__str__())
     for name, pred in prediction_group:
         pred.drop(columns=['name']).set_index('time').to_csv(write_folder / f"{name.decode('utf-8')}")

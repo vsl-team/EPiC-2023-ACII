@@ -143,38 +143,68 @@ class FeatureTransform(layers.Layer):
 
 class EPiCModel(tf.keras.Model):
     def __init__(self, seq_len, num_stages=4, num_outputs=2, dim_ff=64, n_heads=4, n_layers=4, hid_multiplier=4,
-                 random_feature=False, **kwargs):
+                 random_feature=False, variant=1, **kwargs):
         inputs = layers.Input(shape=(seq_len, 8), name='phys')
 
-        # Normalize each feature over time-dimension
-        # Input size: B x L x 8, convert to B x 8 x L, do Normalize, and convert back
-        x = tf.einsum("...ij->...ji", inputs)
-        x = layers.LayerNormalization(axis=-1)(x)
-        x = tf.einsum("...ij->...ji", x)
+        if variant == 1:
+            # Normalize each feature over time-dimension
+            # Input size: B x L x 8, convert to B x 8 x L, do Normalize, and convert back
+            x = tf.einsum("...ij->...ji", inputs)
+            x = layers.LayerNormalization(axis=-1)(x)
+            x = tf.einsum("...ij->...ji", x)
 
-        inner_dim = dim_ff * hid_multiplier
+            inner_dim = dim_ff * hid_multiplier
 
-        out_stages = []
-        for idx in range(num_stages):
-            x = Conv1DProjection(proj_dim=dim_ff, kernel_size=3, dilation_rate=1, activation='relu', padding='causal',
-                                 stride=2, name=f"stage_{idx + 1}_proj")(x)
-            x1 = FeatureTransform(dim_ff, n_heads=n_heads, n_layers=n_layers, inner_dim=inner_dim,
-                                  name=f"stage_{idx + 1}_feat")(x)
-            out_stages.append(x1)
+            out_stages = []
+            for idx in range(num_stages):
+                x = Conv1DProjection(proj_dim=dim_ff, kernel_size=3, dilation_rate=1, activation='relu',
+                                     padding='causal',
+                                     stride=2, name=f"stage_{idx + 1}_proj")(x)
+                x1 = FeatureTransform(dim_ff, n_heads=n_heads, n_layers=n_layers, inner_dim=inner_dim,
+                                      name=f"stage_{idx + 1}_feat")(x)
+                out_stages.append(x1)
 
-        x = tf.concat(out_stages, axis=-1)
+            x = tf.concat(out_stages, axis=-1)
 
-        if random_feature:
+            if random_feature:
+                x = tf.cast(x, dtype=tf.float32)
+                x = tf.keras.layers.experimental.RandomFourierFeatures(dim_ff * num_stages * hid_multiplier,
+                                                                       kernel_initializer='gaussian',
+                                                                       dtype=tf.float32)(x)
+
+            x = RegressionHead(num_outputs=num_outputs, dim_ff=dim_ff * num_stages * hid_multiplier, activation='relu',
+                               random_feature=True)(x)
+
+        elif variant == 2:
+            # Input size: B x L x 8, convert to (B x 8) x L
+            x = tf.einsum("...ij->...ji", inputs)
+            x = tf.reshape(x, (-1, seq_len))
+            # Compute RandomFeature
             x = tf.cast(x, dtype=tf.float32)
-            x = tf.keras.layers.experimental.RandomFourierFeatures(dim_ff*num_stages*hid_multiplier, kernel_initializer='gaussian',
-                                                                   dtype=tf.float32)(x)
+            n_feats = dim_ff * num_stages
+            x = tf.keras.layers.experimental.RandomFourierFeatures(n_feats,
+                                                                   kernel_initializer='gaussian', dtype=tf.float32)(x)
+            x = tf.reshape(x, (-1, 8, n_feats))
 
-        x = RegressionHead(num_outputs=num_outputs, dim_ff=dim_ff*num_stages*hid_multiplier, activation='relu', random_feature=True)(x)
+            out_stages = []
+            for idx in range(num_stages):
+                inner_dim = n_feats * hid_multiplier
+                x1 = FeatureTransform(n_feats, n_heads=n_heads, n_layers=n_layers, inner_dim=inner_dim,
+                                      name=f"stage_{idx + 1}_feat")(x)
+                out_stages.append(x1)
+
+            x = tf.concat(out_stages, axis=-1)
+            x = RegressionHead(num_outputs=num_outputs, dim_ff=dim_ff * num_stages * hid_multiplier, activation='relu',
+                               random_feature=True)(x)
+        else:
+            raise ValueError(f'Unknown EPiCModel with variant = {variant}')
 
         output = tf.cast(x, dtype=inputs.dtype)
         super(EPiCModel, self).__init__(inputs=[inputs, ], outputs=[output], **kwargs)
 
-        self._config_dict = {'seq_len': seq_len, 'num_stages': num_stages, 'num_outputs': num_outputs}
+        self._config_dict = {'seq_len': seq_len, 'num_stages': num_stages, 'num_outputs': num_outputs, "dim_ff": dim_ff,
+                             "n_heads": n_heads, "n_layers": n_layers, "hid_multiplier": hid_multiplier,
+                             "random_feature": random_feature, "variant": variant}
 
     def get_outputs_call(self, input_data, training=None):
         input_dict = {'phys': input_data['phys'][:, :, 1:]}

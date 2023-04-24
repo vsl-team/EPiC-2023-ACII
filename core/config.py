@@ -45,6 +45,9 @@ _C.MODEL.HID_MULT = 4
 
 # Path to Pretrained weight
 _C.MODEL.PRETRAINED = ""
+
+# Model variant
+_C.MODEL.VARIANT = 1
 # -------------------------------- Optimizer options --------------------------------- #
 _C.OPTIM = CfgNode()
 
