@@ -1,0 +1,27 @@
+OUT_DIR: '/mnt/Work/Dataset/ACII-23/EPiC/train_logs/tmp'
+DATA_LOADER:
+  DATA_DIR: '/home/sXProject/EPiC23/data'
+  SCENARIO: 1
+  FOLD: 0
+  VAL_RATIO: 0.
+MODEL:
+  SEQ_LEN: 2048
+  VARIANT: 1
+  DIM_FF: 1024
+TRAIN:
+  BATCH_SIZE: 2
+  EPOCHS: 5
+  STEP_PER_EPOCH: 1000
+  MIXED_PRECISION: True
+TEST:
+  BATCH_SIZE: 256
+OPTIM:
+  NAME: 'adam'
+  WEIGHT_DECAY: 0.004
+  BASE_LR: 1e-3
+  WARMUP_STEPS: 0.1
+  LR_SCHEDULER: 'cosine'  # 'cosine'
+  LR_SCHEDULER_DECAY_STEPS: 0.2
+  LR_SCHEDULER_ALPHA: 0.01
+LOGGER: 'Tensorboard' # Tensorboard or wandb
+DEBUG: True
