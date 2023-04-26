@@ -6,7 +6,7 @@ import tensorflow as tf
 
 tf.get_logger().setLevel('ERROR')
 
-from keras.callbacks import TensorBoard
+from keras.callbacks import TensorBoard, TerminateOnNaN
 from official.modeling.optimization import CosineDecayWithOffset, LinearWarmup
 
 from core import utils, config
@@ -78,16 +78,16 @@ def get_mode(run_cfg):
     if run_cfg.OPTIM.NAME == 'adam':
         print('Use Adam optimizer')
         opt = tf.optimizers.Adam(learning_rate=lr_opt)
-        opt.exclude_from_weight_decay(var_names=['LayerNorm', 'layer_norm', 'bias'])
     elif run_cfg.OPTIM.NAME == 'adamw':
         print('Use AdamW optimizer')
-        opt = tf.optimizers.AdamW(learning_rate=lr_opt, weight_decay=wd)
+        opt = tf.optimizers.AdamW(learning_rate=lr_opt, weight_decay=wd,) #  clipnorm=2.
+        opt.exclude_from_weight_decay(var_names=['LayerNorm', 'layer_norm', 'bias'])
     else:
         print('Only support Adam, AdamW, and SGD. Use SGD by default')
         opt = tf.optimizers.SGD(learning_rate=lr_opt)
 
     loss_func = tf.losses.MeanSquaredError()
-    metrics = [tf.metrics.MeanSquaredError(name='mse')]
+    metrics = [tf.metrics.MeanSquaredError(name='mse'), tf.metrics.RootMeanSquaredError(name='rmse')]
 
     model.compile(optimizer=opt, loss=loss_func, metrics=metrics, run_eagerly=run_cfg.DEBUG)
 
@@ -101,7 +101,7 @@ def get_mode(run_cfg):
             if model.layers[idx].name != 'regression_head':
                 model.layers[idx].trainable = False
 
-        print("after freezed, trainable_weights:", len(model.trainable_weights))
+        print("after frozen, trainable_weights:", len(model.trainable_weights))
 
     return model
 
@@ -117,7 +117,7 @@ def run_experiments(run_cfg, num_gpus):
     model = get_mode(run_cfg)
 
     print(f'Logging to {tsb_logdir.__str__()}')
-    callbacks = [TensorBoard(log_dir=tsb_logdir), ]
+    callbacks = [TensorBoard(log_dir=tsb_logdir), TerminateOnNaN()]
 
     model.fit(dataloader['train'], validation_data=dataloader['val'], epochs=n_epoch, callbacks=callbacks,
               steps_per_epoch=steps_per_epoch)

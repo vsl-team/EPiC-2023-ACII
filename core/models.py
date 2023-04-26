@@ -1,3 +1,5 @@
+import math
+
 import keras
 import tensorflow as tf
 from keras import layers
@@ -19,7 +21,7 @@ class RegressionHead(layers.Layer):
 
     def build(self, input_shape):
 
-        if not self._random_feature:
+        if not self._random_feature and self._dim_ff > 0:
             reg_layers = [layers.Dense(self._dim_ff, kernel_initializer='HeNormal'),
                           layers.Activation(self._activation),
                           layers.Dense(self._num_outputs, activation='linear', kernel_initializer='HeNormal')]
@@ -78,7 +80,8 @@ class Conv1DProjection(layers.Layer):
 
 class FeatureTransform(layers.Layer):
     def __init__(self, num_feats, n_heads=4, n_layers=4, activation='gelu', inner_dim=256, dropout_rate=0.,
-                 attn_dropout_rate=0., inner_dropout=0., use_bias=False, norm_first=True, norm_epsilon=1e-6, **kwargs):
+                 attn_dropout_rate=0., inner_dropout=0., use_bias=False, norm_first=True, norm_epsilon=1e-6,
+                 output_dim=None, use_pos=True, **kwargs):
         super().__init__(**kwargs)
 
         self._num_feats = num_feats
@@ -92,9 +95,12 @@ class FeatureTransform(layers.Layer):
         self._use_bias = use_bias
         self._norm_first = norm_first
         self._norm_epsilon = norm_epsilon
+        self._output_dim = output_dim
+        self._use_pos = use_pos
 
     def build(self, input_shape):
-        self.position_embedding = nlp_layers.RelativePositionEmbedding(hidden_size=self._num_feats)
+        if self._use_pos:
+            self.position_embedding = nlp_layers.RelativePositionEmbedding(hidden_size=self._num_feats)
         self.encoder_layers = []
         for i in range(self._n_layers):
             self.encoder_layers.append(
@@ -105,6 +111,8 @@ class FeatureTransform(layers.Layer):
                                                    inner_dropout=self._inner_dropout,
                                                    name=f"layer_{i}"))
         self.output_norm = layers.LayerNormalization(epsilon=self._norm_epsilon, dtype=tf.float32)
+        if self._output_dim is not None:
+            self.proj_head = layers.Dense(self._output_dim, kernel_initializer='HeNormal')
         super(FeatureTransform, self).build(input_shape)
 
     def call(self, inputs, training=None):
@@ -120,30 +128,36 @@ class FeatureTransform(layers.Layer):
         x = inputs
 
         # Transformer encoder
-        pos_encoding = self.position_embedding(x)
-        pos_encoding = tf.cast(pos_encoding, inputs.dtype)
-        x = x + pos_encoding
+        if self._use_pos:
+            pos_encoding = self.position_embedding(x, training=training)
+            pos_encoding = tf.cast(pos_encoding, inputs.dtype)
+            x = x + pos_encoding
 
         for layer_idx in range(self._n_layers):
-            x = self.encoder_layers[layer_idx](x)
-        x = self.output_norm(x)
+            x = self.encoder_layers[layer_idx](x, training=training)
+        if self._output_dim is not None:
+            x = self.proj_head(x)
+        x = self.output_norm(x, training=training)
         # End of Transformer encoder
 
         x = tf.reduce_mean(x, axis=1)
         x = tf.cast(x, inputs.dtype)
+
         return x
 
     def get_config(self):
         config = {"num_feats": self._num_feats, "n_heads": self._n_heads, "n_layers": self._n_layers,
                   "activation": self._activation, "inner_dim": self._inner_dim, "dropout_rate": self._dropout_rate,
                   "attn_dropout_rate": self._attn_dropout_rate, "inner_dropout": self._inner_dropout,
-                  "use_bias": self._use_bias, "norm_first": self._norm_first, "norm_epsilon": self._norm_epsilon}
+                  "use_bias": self._use_bias, "norm_first": self._norm_first, "norm_epsilon": self._norm_epsilon,
+                  'output_dim': self._output_dim,
+                  }
         return config
 
 
 class EPiCModel(tf.keras.Model):
     def __init__(self, seq_len, num_stages=4, num_outputs=2, dim_ff=64, n_heads=4, n_layers=4, hid_multiplier=4,
-                 random_feature=False, variant=1, **kwargs):
+                 random_feature=False, variant=1, n_feats=1024, **kwargs):
         inputs = layers.Input(shape=(seq_len, 8), name='phys')
 
         if variant == 1:
@@ -196,6 +210,36 @@ class EPiCModel(tf.keras.Model):
             x = tf.concat(out_stages, axis=-1)
             x = RegressionHead(num_outputs=num_outputs, dim_ff=dim_ff * num_stages * hid_multiplier, activation='relu',
                                random_feature=True)(x)
+
+        elif variant == 3:
+
+            x = inputs
+            inner_dim = dim_ff * hid_multiplier
+            out_stages = []
+            # x0 = self.compute_output(-1, x, seq_len, use_random_feature=True, down_sampling=3, n_feats=dim_ff,
+            #                          n_heads=n_heads, n_layers=n_layers, inner_dim=inner_dim, output_dim=n_feats,
+            #                          swap_tf_dim=False)
+            # out_stages.append(x0)
+
+            for idx in range(num_stages):
+                # Transformer for fusion between signals with original features in time domain
+                x1 = self.compute_output(2 * idx, x, seq_len, use_random_feature=False, down_sampling=idx,
+                                         n_feats=n_feats, n_heads=n_heads, n_layers=n_layers, inner_dim=inner_dim,
+                                         output_dim=n_feats, swap_tf_dim=True)
+                # Transformer for fusion between signals with original features transformed to non-linear domain with Gaussian features
+                x2 = self.compute_output(2 * idx + 1, x, seq_len, use_random_feature=True, down_sampling=idx,
+                                         n_feats=n_feats, n_heads=n_heads, n_layers=n_layers, inner_dim=inner_dim,
+                                         output_dim=n_feats, swap_tf_dim=True)
+
+                out_stages.append(x1)
+                out_stages.append(x2)
+
+            # out_stages = tf.stack(out_stages, axis=1)
+            # out_stages = FeatureTransform(num_feats=n_feats, n_heads=n_heads, n_layers=1,
+            #                               inner_dim=n_feats * hid_multiplier)(out_stages)
+            out_stages = tf.concat(out_stages, axis=-1)
+            x = RegressionHead(num_outputs=num_outputs, dim_ff=dim_ff)(out_stages)
+
         else:
             raise ValueError(f'Unknown EPiCModel with variant = {variant}')
 
@@ -205,6 +249,46 @@ class EPiCModel(tf.keras.Model):
         self._config_dict = {'seq_len': seq_len, 'num_stages': num_stages, 'num_outputs': num_outputs, "dim_ff": dim_ff,
                              "n_heads": n_heads, "n_layers": n_layers, "hid_multiplier": hid_multiplier,
                              "random_feature": random_feature, "variant": variant}
+
+    @staticmethod
+    def compute_output(block_idx, x, seq_len, use_random_feature=True, down_sampling=0, n_feats=2048, n_heads=4,
+                       n_layers=4, inner_dim=4096, output_dim=1024, swap_tf_dim=False):
+        if down_sampling > 0:
+            seq_len = int(math.ceil(seq_len / (2 ** down_sampling)))
+            x = tf.keras.layers.AveragePooling1D(pool_size=2 ** down_sampling, strides=2 ** down_sampling,
+                                                 dtype=tf.float32)(x)
+        # print(block_idx, x.shape)
+        if swap_tf_dim:
+            # Convert x from B x L x C to B x C x L
+            n_input_feats = seq_len
+            x = tf.einsum("...ij->...ji", x)
+            seq_len = 8
+            use_pos = False
+        else:
+            n_input_feats = 8
+            use_pos = True
+            # # Input size: B x L x 8, convert to B x 8 x L
+            # x = tf.einsum("...ij->...ji", x)
+            # # Do normalize
+            # x = layers.LayerNormalization(axis=-1)(x)
+            # #  Convert back to B x L x 8
+            # x = tf.einsum("...ij->...ji", x)
+
+        if use_random_feature:
+            x = tf.reshape(x, (-1, n_input_feats))
+            in_dtype = x.dtype
+            x = tf.cast(x, dtype=tf.float32)
+            x = tf.keras.layers.experimental.RandomFourierFeatures(n_feats,
+                                                                   kernel_initializer='gaussian', dtype=tf.float32)(x)
+            x = tf.reshape(x, (-1, seq_len, n_feats))
+            x = tf.cast(x, in_dtype)
+            n_input_feats = n_feats
+
+        # print(block_idx, n_input_feats)
+        x = FeatureTransform(n_input_feats, n_heads=n_heads, n_layers=n_layers, inner_dim=inner_dim, use_pos=use_pos,
+                             output_dim=output_dim, name=f"stage_{block_idx + 1}_feat")(x)
+
+        return x
 
     def get_outputs_call(self, input_data, training=None):
         input_dict = {'phys': input_data['phys'][:, :, 1:]}
