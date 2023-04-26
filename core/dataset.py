@@ -10,6 +10,7 @@ from sklearn.model_selection import train_test_split
 
 def make_epic_seqs(file_name, win_size, data_rate=1000, anno_rate=20, split=0, n_rows=0):
     """
+    Split a csv file into sequences based on annotation rate and win_size
 
     :param file_name: full path to physiology data
     :param win_size:  window size in second
@@ -33,8 +34,10 @@ def make_epic_seqs(file_name, win_size, data_rate=1000, anno_rate=20, split=0, n
                                                 header=True).skip(nskip_anno).map(
         lambda *x: {'anno': tf.stack(x), 'name': cur_expr_name})
 
+    # Combine physiological data and annotation data into single dataset
     zip_dataset = tf.data.Dataset.zip((phys_file, anno_file))
     if split == 0:
+        # If train then shuffle sequences in current csv file
         return zip_dataset.shuffle(buffer_size=256, reshuffle_each_iteration=True)
     else:
         return zip_dataset
