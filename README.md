@@ -12,10 +12,13 @@ pip install -r requirements.txt
 Our repo are trained on Debian 11.5 with CUDA 12.1 and CUDNN 8.
 
 ```
-@article{vu2023multi,
-  title={Multi-scale Transformer-based Network for Emotion Recognition from Multi Physiological Signals},
-  author={Vu, Tu and Huynh, Van Thong and Kim, Soo-Hyung},
-  journal={arXiv preprint arXiv:2305.00769},
-  year={2023}
+@InProceedings{vu2023,
+  author="Vu, Ngoc Tu and Huynh, Van Thong and Yang, Hyung-Jeong and Kim, Soo-Hyung",
+  title="Multiscale Transformer-Based for Multimodal Affective States Estimation from Physiological Signals",
+  booktitle="Pattern Recognition",
+  year="2023",
+  publisher="Springer Nature Switzerland",
+  pages="113--122",
+  url="https://doi.org/10.1007/978-3-031-47665-5_10"
 }
 ```
